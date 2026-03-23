@@ -6,6 +6,14 @@ edition = "2024"
 [dependencies]
 pest = "2.8.6"
 pest_derive = "2.8.6"
+sea-query = { version = "0.32.7", optional = true }
+serde = { version = "1.0.228", features = ["derive"], optional = true }
 
 [dev-dependencies]
 rstest = "0.26.1"
+sea-query = { version = "0.32.7", features = ["backend-sqlite"] }
+
+[features]
+default = []
+sea-query = ["dep:sea-query"]
+serde = ["dep:serde"]

@@ -2,6 +2,9 @@ use pest::{Parser, iterators::Pair};
 use pest_derive::Parser;
 use std::fmt;
 
+#[cfg(feature = "sea-query")]
+pub mod sea_query;
+
 #[derive(Parser)]
 #[grammar = "src/re.pest"]
 pub struct RExprParser;
@@ -64,6 +67,7 @@ impl fmt::Display for UnaryOperator {
 }
 
 #[derive(Debug, PartialEq, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Value {
     Integer(i64),
     Float(f64),

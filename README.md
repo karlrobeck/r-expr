@@ -34,6 +34,31 @@ Add to your `Cargo.toml`:
 r-expr = { git = "https://github.com/karlrobeck/r-expr" }
 ```
 
+### Optional Features
+
+The library supports optional integrations with feature flags:
+
+**`sea-query`** — Compile expressions to [sea-query](https://docs.rs/sea-query/) `SimpleExpr` for database queries:
+
+```toml
+[dependencies]
+r-expr = { git = "https://github.com/karlrobeck/r-expr", features = ["sea-query"] }
+```
+
+**`serde`** — Serialize/deserialize `Value` with serde:
+
+```toml
+[dependencies]
+r-expr = { git = "https://github.com/karlrobeck/r-expr", features = ["serde"] }
+```
+
+Multiple features can be combined:
+
+```toml
+[dependencies]
+r-expr = { git = "https://github.com/karlrobeck/r-expr", features = ["sea-query", "serde"] }
+```
+
 ### Basic Example
 
 ```rust
@@ -305,113 +330,82 @@ pub enum UnaryOperator {
 }
 ```
 
-## Example: SQL Integration
+## Example: Sea-Query Integration (Feature: `sea-query`)
 
-One common use case is converting `r-expr` expressions to SQL. Here's how you might build a simple SQL compiler:
+The library provides a `ToSeaQuery` trait to compile `r-expr` expressions into [sea-query](https://docs.rs/sea-query/) `SimpleExpr` for database-agnostic query building. Enable the `sea-query` feature to use this integration:
+
+```toml
+[dependencies]
+r-expr = { git = "https://github.com/karlrobeck/r-expr", features = ["sea-query"] }
+sea-query = "0.32"
+```
+
+**Example Usage:**
 
 ```rust
-use r_expr::{parse, Value};
-
-fn to_sql(value: &Value) -> String {
-    match value {
-        Value::Integer(n) => n.to_string(),
-        Value::Float(f) => f.to_string(),
-        Value::String(s) => format!("'{}'", s.replace("'", "''")),
-        Value::Identifier(id) => id.clone(),
-        Value::Accessor(parent, field) => {
-            let parent_sql = to_sql(parent);
-            let field_sql = to_sql(field);
-            
-            // Remove quotes from field identifier for SQL column syntax
-            if let Value::Identifier(col) = **field {
-                format!("{}.{}", parent_sql, col)
-            } else {
-                format!("{}[{}]", parent_sql, field_sql)
-            }
-        },
-        Value::FunctionCall(name, args) => {
-            let args_sql = args
-                .iter()
-                .map(to_sql)
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("{}({})", name.to_uppercase(), args_sql)
-        },
-        Value::MethodCall(obj, method, args) => {
-            let obj_sql = to_sql(obj);
-            let args_sql = args
-                .iter()
-                .map(to_sql)
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("{}({}, {})", method.to_uppercase(), obj_sql, args_sql)
-        },
-        Value::BinaryOp(op, left, right) => {
-            let left_sql = to_sql(left);
-            let right_sql = to_sql(right);
-            let op_str = match op {
-                BinaryOperator::Add => "+",
-                BinaryOperator::Subtract => "-",
-                BinaryOperator::Multiply => "*",
-                BinaryOperator::Divide => "/",
-                BinaryOperator::Modulo => "%",
-                BinaryOperator::Equal => "=",
-                BinaryOperator::NotEqual => "!=",
-                BinaryOperator::Less => "<",
-                BinaryOperator::LessEqual => "<=",
-                BinaryOperator::Greater => ">",
-                BinaryOperator::GreaterEqual => ">=",
-                BinaryOperator::And => "AND",
-                BinaryOperator::Or => "OR",
-            };
-            format!("({} {} {})", left_sql, op_str, right_sql)
-        },
-        Value::UnaryOp(op, operand) => {
-            let operand_sql = to_sql(operand);
-            let op_str = match op {
-                UnaryOperator::Not => "NOT",
-                UnaryOperator::Negate => "-",
-                UnaryOperator::BitwiseNot => "~",
-            };
-            format!("({} {})", op_str, operand_sql)
-        },
-    }
-}
+use r_expr::{parse, ToSeaQuery};
+use sea_query::Query;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Example: my_value:sum() → SELECT SUM(my_value)
-    let expr = parse("sales:sum()")?;
-    let sql = to_sql(&expr);
-    println!("SQL: SELECT {}", sql);
-    // Output: SQL: SELECT SUM(sales)
-    
-    // Example: user.created_at → user.created_at
-    let expr = parse("user.created_at")?;
-    let sql = to_sql(&expr);
-    println!("SQL: {}", sql);
-    // Output: SQL: user.created_at
-    
-    // Example: user.age > 18 AND status == "active"
+    // Parse an expression and convert to sea-query
     let expr = parse("user.age > 18 && status == \"active\"")?;
-    let sql = to_sql(&expr);
-    println!("SQL: WHERE {}", sql);
-    // Output: SQL: WHERE ((user.age > 18) AND (status = 'active'))
+    let sea_expr = expr.to_sea_query();
     
-    // Example: (order_total * 1.1) > 1000 (with parentheses)
-    let expr = parse("(order.total * 1.1) > 1000")?;
-    let sql = to_sql(&expr);
-    println!("SQL: WHERE {}", sql);
-    // Output: SQL: WHERE (((order.total * 1.1)) > 1000)
+    // Use in a SQL query
+    let (sql, values) = Query::select()
+        .from(...)
+        .and_where(sea_expr)
+        .build(...);  // Specify backend (MySQL, Postgres, Sqlite)
     
+    println!("SQL: {}", sql);
     Ok(())
 }
 ```
 
-With this template, you can build more sophisticated SQL generators that:
-- Convert method calls to aggregate functions for `SELECT` projections
-- Build `WHERE` clauses with comparison operators
-- Construct `ORDER BY` and `GROUP BY` clauses
-- Transform `r-expr` expressions into parameterized queries
+**Supported Value Conversions:**
+
+| r-expr Value | sea-query SimpleExpr |
+|--------------|---------------------|
+| `Integer(42)` | `Value(42i64)` |
+| `Float(3.14)` | `Value(3.14f64)` |
+| `String("text")` | `Value("text")` |
+| `Identifier("field")` | `Column(field)` |
+| `Accessor(obj, field)` | `Column(field)` — extracts final field name |
+| `FunctionCall("max", args)` | `FunctionCall` with converted args |
+| `MethodCall(obj, method, args)` | `FunctionCall` with object as first arg |
+| `BinaryOp(+, /, ==, etc.)` | `Binary(left, BinOper, right)` with proper operator mapping |
+| `UnaryOp(!, -)` | `Unary(UnOper, expr)` — logical NOT and arithmetic negation |
+
+**Example: Building a WHERE Clause**
+
+```rust
+use r_expr::{parse, ToSeaQuery};
+use sea_query::{Query, SqliteQueryBuilder};
+
+let expr = parse("price > 100 && category == \"electronics\"")?;
+let filter = expr.to_sea_query();
+
+let (sql, _) = Query::select()
+    .from(Table::Products)
+    .and_where(filter)
+    .build(SqliteQueryBuilder);
+
+println!("{}", sql);
+// Output: SELECT * FROM products WHERE price > 100 AND category = 'electronics'
+```
+
+**Binary Operators Supported:**
+- Arithmetic: `+`, `-`, `*`, `/`, `%`
+- Comparison: `==`, `!=`, `<`, `<=`, `>`, `>=`
+- Logical: `&&`, `||`
+
+**Unary Operators Supported:**
+- Logical NOT: `!`
+- Negation: `-`  (represented as multiplication by -1)
+
+**Note:** Bitwise NOT (`~`) is not directly supported in sea-query 0.32.7 and will panic if encountered.
+
+With sea-query, you can build complex, database-independent queries in Rust with full operator support, automatic SQL generation, and type safety.
 
 ## Use Cases
 
