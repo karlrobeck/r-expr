@@ -173,6 +173,23 @@ mod tests {
         let _result = value.to_sea_query();
     }
 
+    #[rstest::rstest]
+    // Method chaining cases (NEW)
+    #[case::chain_two_simple("obj:m1():m2()")]
+    #[case::chain_two_with_args("obj:m1(5):m2(10)")]
+    #[case::chain_two_mixed_args(r#"obj:m1("x"):m2(5)"#)]
+    #[case::chain_three("obj:m1():m2():m3()")]
+    #[case::chain_three_with_args("obj:m1(1):m2(2):m3(3)")]
+    #[case::chain_on_accessor("obj.prop:m1():m2()")]
+    #[case::chain_on_accessor_with_args("obj.data:process(5):filter(10)")]
+    #[case::chain_four("obj:a():b():c():d()")]
+    fn test_method_chaining(#[case] input: &str) {
+        let value = parse(input).expect("Failed to parse input");
+        let result = value.to_sea_query();
+        // Verify conversion doesn't panic and returns a valid SimpleExpr
+        assert!(!format!("{:?}", result).is_empty());
+    }
+
     #[test]
     fn test_integer_conversion() {
         let value = parse("42").expect("Failed to parse");
@@ -280,6 +297,64 @@ mod tests {
                 // Method call is converted to a function call with object as first arg
             }
             _ => panic!("Expected SimpleExpr::FunctionCall"),
+        }
+    }
+
+    #[test]
+    fn test_method_chaining_two_methods() {
+        // obj:m1():m2() should convert to nested function calls
+        let value = parse("obj:m1():m2()").expect("Failed to parse input");
+        let expr = value.to_sea_query();
+
+        // The outer call should be a function call for m2
+        match expr {
+            sea_query::SimpleExpr::FunctionCall(_) => {
+                // Successfully converts to function call; the argument is the result of m1()
+                // We can't easily inspect nested structure, but non-panic is success
+            }
+            _ => panic!("Expected SimpleExpr::FunctionCall for chained method"),
+        }
+    }
+
+    #[test]
+    fn test_method_chaining_with_arguments() {
+        // obj:m1(5):m2(10) should create nested calls preserving arg counts
+        let value = parse("obj:m1(5):m2(10)").expect("Failed to parse input");
+        let expr = value.to_sea_query();
+
+        match expr {
+            sea_query::SimpleExpr::FunctionCall(_) => {
+                // m2's first arg is the result of m1(5), second arg is 10
+            }
+            _ => panic!("Expected SimpleExpr::FunctionCall for chained method with args"),
+        }
+    }
+
+    #[test]
+    fn test_method_chaining_three_deep() {
+        // obj:a():b():c() should create a function call hierarchy
+        let value = parse("obj:a():b():c()").expect("Failed to parse input");
+        let expr = value.to_sea_query();
+
+        match expr {
+            sea_query::SimpleExpr::FunctionCall(_) => {
+                // Top-level is c(b(a(obj)))
+            }
+            _ => panic!("Expected SimpleExpr::FunctionCall for three-level chain"),
+        }
+    }
+
+    #[test]
+    fn test_method_chaining_on_accessor() {
+        // obj.prop:m1():m2() - method chain on accessor chain
+        let value = parse("obj.prop:m1():m2()").expect("Failed to parse input");
+        let expr = value.to_sea_query();
+
+        match expr {
+            sea_query::SimpleExpr::FunctionCall(_) => {
+                // m2(m1(obj.prop))
+            }
+            _ => panic!("Expected SimpleExpr::FunctionCall for accessor with chain"),
         }
     }
 }

@@ -25,8 +25,12 @@ arg = { float_with_sign | integer_with_sign | string }
 // Direct function call: identifier(arg, arg, ...)
 function_call = { identifier ~ "(" ~ (arg ~ ("," ~ arg)*)? ~ ")" }
 
-// Method call: accessor_chain:identifier(arg, arg, ...)
-method_call = { accessor_chain ~ ":" ~ identifier ~ "(" ~ (arg ~ ("," ~ arg)*)? ~ ")" }
+// Method suffix: a single method/function call in a chain: :identifier(args?)
+method_suffix = { ":" ~ identifier ~ "(" ~ (arg ~ ("," ~ arg)*)? ~ ")" }
+
+// Method call chain: accessor_chain followed by one or more method suffixes
+// Supports chaining like: obj:m1():m2():m3()
+method_call = { accessor_chain ~ method_suffix+ }
 
 // Value: can be a method call, function call, accessor chain, or literal
 // Order matters: try more specific patterns first

@@ -10,6 +10,7 @@ pub mod sea_query;
 pub struct RExprParser;
 
 #[derive(Debug, PartialEq, Clone, Copy)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum BinaryOperator {
     // Arithmetic
     Add,
@@ -30,6 +31,7 @@ pub enum BinaryOperator {
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum UnaryOperator {
     Not,
     Negate,
@@ -214,25 +216,39 @@ fn pair_to_value(pair: Pair<Rule>) -> Value {
         }
         Rule::method_call => {
             let mut inner = pair.into_inner();
-            let accessor_pair = inner.next().unwrap(); // accessor_chain
-            let method_name_pair = inner.next().unwrap(); // identifier (after ':')
-            let method_name = method_name_pair.as_str().to_string();
-
-            let accessor_value = pair_to_value(accessor_pair);
-
-            // Collect all args
-            let args = inner
-                .filter_map(|p| {
-                    if p.as_rule() == Rule::arg {
-                        let arg_inner = p.into_inner().next().unwrap();
-                        Some(pair_to_value(arg_inner))
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-
-            Value::MethodCall(Box::new(accessor_value), method_name, args)
+            
+            // First element is always the accessor_chain (the base object)
+            let accessor_pair = inner.next().unwrap();
+            let mut result = pair_to_value(accessor_pair);
+            
+            // Iterate through all method_suffix pairs and build left-associative chain
+            // Each method_suffix is: ":" ~ identifier ~ "(" ~ (arg ~ ("," ~ arg)*)? ~ ")"
+            for suffix_pair in inner {
+                if suffix_pair.as_rule() == Rule::method_suffix {
+                    let mut suffix_inner = suffix_pair.into_inner();
+                    
+                    // Extract method name (identifier)
+                    let method_name_pair = suffix_inner.next().unwrap();
+                    let method_name = method_name_pair.as_str().to_string();
+                    
+                    // Collect all args for this method
+                    let args = suffix_inner
+                        .filter_map(|p| {
+                            if p.as_rule() == Rule::arg {
+                                let arg_inner = p.into_inner().next().unwrap();
+                                Some(pair_to_value(arg_inner))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    
+                    // Build left-associative chain: wrap previous result in new MethodCall
+                    result = Value::MethodCall(Box::new(result), method_name, args);
+                }
+            }
+            
+            result
         }
         Rule::function_call => {
             let mut inner = pair.into_inner();
@@ -554,6 +570,36 @@ mod tests {
             vec![],
         );
         let result = parse("root.level1[0].level2[\"key\"].obj:execute()");
+        assert_eq!(result, expected);
+    }
+
+    #[rstest::rstest]
+    // Simple two-method chains (left-associative: apply m1 first, then m2)
+    #[case::chain_two_simple("obj:m1():m2()", Value::MethodCall(Box::new(Value::MethodCall(Box::new(Value::Identifier("obj".to_string())), "m1".to_string(), vec![])), "m2".to_string(), vec![]))]
+    #[case::chain_two_with_first_args("obj:m1(5):m2()", Value::MethodCall(Box::new(Value::MethodCall(Box::new(Value::Identifier("obj".to_string())), "m1".to_string(), vec![Value::Integer(5)])), "m2".to_string(), vec![]))]
+    #[case::chain_two_with_second_args("obj:m1():m2(10)", Value::MethodCall(Box::new(Value::MethodCall(Box::new(Value::Identifier("obj".to_string())), "m1".to_string(), vec![])), "m2".to_string(), vec![Value::Integer(10)]))]
+    #[case::chain_two_with_both_args("obj:m1(5):m2(10)", Value::MethodCall(Box::new(Value::MethodCall(Box::new(Value::Identifier("obj".to_string())), "m1".to_string(), vec![Value::Integer(5)])), "m2".to_string(), vec![Value::Integer(10)]))]
+    #[case::chain_two_with_string_args(r#"obj:m1("a"):m2("b")"#, Value::MethodCall(Box::new(Value::MethodCall(Box::new(Value::Identifier("obj".to_string())), "m1".to_string(), vec![Value::String("a".to_string())])), "m2".to_string(), vec![Value::String("b".to_string())]))]
+    
+    // Three-method chains
+    #[case::chain_three_simple("obj:m1():m2():m3()", Value::MethodCall(Box::new(Value::MethodCall(Box::new(Value::MethodCall(Box::new(Value::Identifier("obj".to_string())), "m1".to_string(), vec![])), "m2".to_string(), vec![])), "m3".to_string(), vec![]))]
+    #[case::chain_three_with_args("obj:m1(1):m2(2):m3(3)", Value::MethodCall(Box::new(Value::MethodCall(Box::new(Value::MethodCall(Box::new(Value::Identifier("obj".to_string())), "m1".to_string(), vec![Value::Integer(1)])), "m2".to_string(), vec![Value::Integer(2)])), "m3".to_string(), vec![Value::Integer(3)]))]
+    
+    // Four-method chains (extended length)
+    #[case::chain_four("obj:a():b():c():d()", Value::MethodCall(Box::new(Value::MethodCall(Box::new(Value::MethodCall(Box::new(Value::MethodCall(Box::new(Value::Identifier("obj".to_string())), "a".to_string(), vec![])), "b".to_string(), vec![])), "c".to_string(), vec![])), "d".to_string(), vec![]))]
+    
+    // Chains on accessor chains (complex receivers)
+    #[case::chain_on_dot_access("obj.prop:m1():m2()", Value::MethodCall(Box::new(Value::MethodCall(Box::new(Value::Accessor(Box::new(Value::Identifier("obj".to_string())), Box::new(Value::Identifier("prop".to_string())))), "m1".to_string(), vec![])), "m2".to_string(), vec![]))]
+    #[case::chain_on_bracket_access("arr[0]:m1():m2()", Value::MethodCall(Box::new(Value::MethodCall(Box::new(Value::Accessor(Box::new(Value::Identifier("arr".to_string())), Box::new(Value::Integer(0)))), "m1".to_string(), vec![])), "m2".to_string(), vec![]))]
+    #[case::chain_on_mixed_access("obj.arr[0]:m1():m2()", Value::MethodCall(Box::new(Value::MethodCall(Box::new(Value::Accessor(Box::new(Value::Accessor(Box::new(Value::Identifier("obj".to_string())), Box::new(Value::Identifier("arr".to_string())))), Box::new(Value::Integer(0)))), "m1".to_string(), vec![])), "m2".to_string(), vec![]))]
+    
+    // Chains with mixed argument types
+    #[case::chain_mixed_args("obj:m1(1, \"x\"):m2(2.5, \"y\")", Value::MethodCall(Box::new(Value::MethodCall(Box::new(Value::Identifier("obj".to_string())), "m1".to_string(), vec![Value::Integer(1), Value::String("x".to_string())])), "m2".to_string(), vec![Value::Float(2.5), Value::String("y".to_string())]))]
+    
+    // Chains with underscores in names
+    #[case::chain_underscore_names("_obj:_m1():_m2()", Value::MethodCall(Box::new(Value::MethodCall(Box::new(Value::Identifier("_obj".to_string())), "_m1".to_string(), vec![])), "_m2".to_string(), vec![]))]
+    fn test_method_chaining(#[case] input: &str, #[case] expected: Value) {
+        let result = parse(input);
         assert_eq!(result, expected);
     }
 
