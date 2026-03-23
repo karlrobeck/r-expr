@@ -4,12 +4,14 @@ WHITESPACE = _{ " " | "\t" }
 identifier = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
 
 // Literal types
-integer = @{ "-"? ~ ASCII_DIGIT+ }
-float = @{ "-"? ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ ~ (("e" | "E") ~ ("-" | "+")? ~ ASCII_DIGIT+)? }
+integer = @{ ASCII_DIGIT+ }
+integer_with_sign = @{ "-"? ~ ASCII_DIGIT+ }
+float = @{ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ ~ (("e" | "E") ~ ("-" | "+")? ~ ASCII_DIGIT+)? }
+float_with_sign = @{ "-"? ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ ~ (("e" | "E") ~ ("-" | "+")? ~ ASCII_DIGIT+)? }
 string = @{ "\"" ~ (("\\" ~ ANY) | (!"\"" ~ ANY))* ~ "\"" }
 
 // Index values for bracket accessors: only integers or strings (no identifiers or floats)
-index_value = { integer | string }
+index_value = { integer_with_sign | string }
 
 // Accessor suffix: either dot access (. identifier) or bracket access ([ index_value ])
 accessor_suffix = { ("." ~ identifier) | ("[" ~ index_value ~ "]") }
@@ -17,8 +19,8 @@ accessor_suffix = { ("." ~ identifier) | ("[" ~ index_value ~ "]") }
 // Accessor chain: identifier followed by zero or more accessor suffixes
 accessor_chain = { identifier ~ accessor_suffix* }
 
-// Function arguments: only literals (no identifiers, accessors, or nested calls)
-arg = { float | integer | string }
+// Function arguments: only literals with optional sign (no identifiers, accessors, or nested calls)
+arg = { float_with_sign | integer_with_sign | string }
 
 // Direct function call: identifier(arg, arg, ...)
 function_call = { identifier ~ "(" ~ (arg ~ ("," ~ arg)*)? ~ ")" }
@@ -30,5 +32,26 @@ method_call = { accessor_chain ~ ":" ~ identifier ~ "(" ~ (arg ~ ("," ~ arg)*)? 
 // Order matters: try more specific patterns first
 value = { method_call | function_call | accessor_chain | float | integer | string }
 
-// Program: a single value (no assignments)
-program = { SOI ~ value ~ EOI }
+// Operator precedence (lowest to highest):
+// logical_or < logical_and < comparison < additive < multiplicative < unary < primary
+
+primary = { "(" ~ logical_or ~ ")" | value }
+
+unary_op = @{ "!" | "-" | "~" }
+unary = { (unary_op ~ unary) | primary }
+
+mult_op = @{ "*" | "/" | "%" }
+multiplicative = { unary ~ (mult_op ~ unary)* }
+
+add_op = @{ "+" | "-" }
+additive = { multiplicative ~ (add_op ~ multiplicative)* }
+
+cmp_op = @{ "==" | "!=" | "<=" | ">=" | "<" | ">" }
+comparison = { additive ~ (cmp_op ~ additive)* }
+
+logical_and = { comparison ~ ("&&" ~ comparison)* }
+
+logical_or = { logical_and ~ ("||" ~ logical_and)* }
+
+// Program: a single logical_or expression (no assignments)
+program = { SOI ~ logical_or ~ EOI }

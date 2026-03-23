@@ -1,9 +1,67 @@
 use pest::{Parser, iterators::Pair};
 use pest_derive::Parser;
+use std::fmt;
 
 #[derive(Parser)]
 #[grammar = "src/re.pest"]
 pub struct RExprParser;
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum BinaryOperator {
+    // Arithmetic
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+    Modulo,
+    // Comparison
+    Equal,
+    NotEqual,
+    Less,
+    LessEqual,
+    Greater,
+    GreaterEqual,
+    // Logical
+    And,
+    Or,
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum UnaryOperator {
+    Not,
+    Negate,
+    BitwiseNot,
+}
+
+impl fmt::Display for BinaryOperator {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            BinaryOperator::Add => write!(f, "+"),
+            BinaryOperator::Subtract => write!(f, "-"),
+            BinaryOperator::Multiply => write!(f, "*"),
+            BinaryOperator::Divide => write!(f, "/"),
+            BinaryOperator::Modulo => write!(f, "%"),
+            BinaryOperator::Equal => write!(f, "=="),
+            BinaryOperator::NotEqual => write!(f, "!="),
+            BinaryOperator::Less => write!(f, "<"),
+            BinaryOperator::LessEqual => write!(f, "<="),
+            BinaryOperator::Greater => write!(f, ">"),
+            BinaryOperator::GreaterEqual => write!(f, ">="),
+            BinaryOperator::And => write!(f, "&&"),
+            BinaryOperator::Or => write!(f, "||"),
+        }
+    }
+}
+
+impl fmt::Display for UnaryOperator {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            UnaryOperator::Not => write!(f, "!"),
+            UnaryOperator::Negate => write!(f, "-"),
+            UnaryOperator::BitwiseNot => write!(f, "~"),
+        }
+    }
+}
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Value {
@@ -14,16 +72,18 @@ pub enum Value {
     Accessor(Box<Value>, Box<Value>), // For dot and bracket accessors
     FunctionCall(String, Vec<Value>), // For direct function calls
     MethodCall(Box<Value>, String, Vec<Value>), // For method calls
+    BinaryOp(BinaryOperator, Box<Value>, Box<Value>),
+    UnaryOp(UnaryOperator, Box<Value>),
 }
 
 pub fn parse(input: &str) -> Result<Value, pest::error::Error<Rule>> {
     let mut pairs = RExprParser::parse(Rule::program, input)?;
     let program_pair = pairs.next().unwrap();
 
-    // Extract the value from the program (program -> SOI ~ value ~ EOI)
+    // Extract the value from the program (program -> SOI ~ logical_or ~ EOI)
     let value_pair = program_pair
         .into_inner()
-        .find(|p| p.as_rule() == Rule::value)
+        .find(|p| p.as_rule() == Rule::logical_or)
         .unwrap();
 
     Ok(pair_to_value(value_pair))
@@ -31,6 +91,118 @@ pub fn parse(input: &str) -> Result<Value, pest::error::Error<Rule>> {
 
 fn pair_to_value(pair: Pair<Rule>) -> Value {
     match pair.as_rule() {
+        Rule::logical_or => {
+            let mut inner = pair.into_inner();
+            let mut left = pair_to_value(inner.next().unwrap());
+
+            for right_pair in inner {
+                if right_pair.as_rule() == Rule::logical_and {
+                    let right = pair_to_value(right_pair);
+                    left = Value::BinaryOp(BinaryOperator::Or, Box::new(left), Box::new(right));
+                }
+            }
+
+            left
+        }
+        Rule::logical_and => {
+            let mut inner = pair.into_inner();
+            let mut left = pair_to_value(inner.next().unwrap());
+
+            for right_pair in inner {
+                if right_pair.as_rule() == Rule::comparison {
+                    let right = pair_to_value(right_pair);
+                    left = Value::BinaryOp(BinaryOperator::And, Box::new(left), Box::new(right));
+                }
+            }
+
+            left
+        }
+        Rule::comparison => {
+            let mut inner = pair.into_inner();
+            let mut left = pair_to_value(inner.next().unwrap());
+
+            while let Some(op_pair) = inner.next() {
+                if op_pair.as_rule() == Rule::cmp_op {
+                    let op = match op_pair.as_str() {
+                        "==" => BinaryOperator::Equal,
+                        "!=" => BinaryOperator::NotEqual,
+                        "<" => BinaryOperator::Less,
+                        "<=" => BinaryOperator::LessEqual,
+                        ">" => BinaryOperator::Greater,
+                        ">=" => BinaryOperator::GreaterEqual,
+                        _ => panic!("Unknown comparison operator: {}", op_pair.as_str()),
+                    };
+
+                    let right = pair_to_value(inner.next().unwrap());
+                    left = Value::BinaryOp(op, Box::new(left), Box::new(right));
+                }
+            }
+
+            left
+        }
+        Rule::additive => {
+            let mut inner = pair.into_inner();
+            let mut left = pair_to_value(inner.next().unwrap());
+
+            while let Some(op_pair) = inner.next() {
+                if op_pair.as_rule() == Rule::add_op {
+                    let op = match op_pair.as_str() {
+                        "+" => BinaryOperator::Add,
+                        "-" => BinaryOperator::Subtract,
+                        _ => panic!("Unknown additive operator: {}", op_pair.as_str()),
+                    };
+
+                    let right = pair_to_value(inner.next().unwrap());
+                    left = Value::BinaryOp(op, Box::new(left), Box::new(right));
+                }
+            }
+
+            left
+        }
+        Rule::multiplicative => {
+            let mut inner = pair.into_inner();
+            let mut left = pair_to_value(inner.next().unwrap());
+
+            while let Some(op_pair) = inner.next() {
+                if op_pair.as_rule() == Rule::mult_op {
+                    let op = match op_pair.as_str() {
+                        "*" => BinaryOperator::Multiply,
+                        "/" => BinaryOperator::Divide,
+                        "%" => BinaryOperator::Modulo,
+                        _ => panic!("Unknown multiplicative operator: {}", op_pair.as_str()),
+                    };
+
+                    let right = pair_to_value(inner.next().unwrap());
+                    left = Value::BinaryOp(op, Box::new(left), Box::new(right));
+                }
+            }
+
+            left
+        }
+        Rule::unary => {
+            let mut inner = pair.into_inner();
+            let first = inner.next().unwrap();
+
+            if first.as_rule() == Rule::unary_op {
+                // We have a unary operator
+                let op = match first.as_str() {
+                    "!" => UnaryOperator::Not,
+                    "-" => UnaryOperator::Negate,
+                    "~" => UnaryOperator::BitwiseNot,
+                    _ => panic!("Unknown unary operator: {}", first.as_str()),
+                };
+                let operand = pair_to_value(inner.next().unwrap());
+                Value::UnaryOp(op, Box::new(operand))
+            } else {
+                // No unary operator, just pass through to primary
+                pair_to_value(first)
+            }
+        }
+        Rule::primary => {
+            // primary contains either (logical_or) or value
+            let inner = pair.into_inner().next().unwrap();
+            pair_to_value(inner)
+        }
         Rule::value => {
             // value contains exactly one of: method_call, function_call, accessor_chain, float, integer, string
             let inner = pair.into_inner().next().unwrap();
@@ -112,11 +284,11 @@ fn pair_to_value(pair: Pair<Rule>) -> Value {
             value
         }
         Rule::identifier => Value::Identifier(pair.as_str().to_string()),
-        Rule::integer => {
+        Rule::integer | Rule::integer_with_sign => {
             let num = pair.as_str().parse::<i64>().unwrap();
             Value::Integer(num)
         }
-        Rule::float => {
+        Rule::float | Rule::float_with_sign => {
             let num = pair.as_str().parse::<f64>().unwrap();
             Value::Float(num)
         }
@@ -200,14 +372,14 @@ mod tests {
     #[case::zero("0", Value::Integer(0))]
     #[case::positive_single_digit("5", Value::Integer(5))]
     #[case::positive_multi_digit("12345", Value::Integer(12345))]
-    #[case::negative_single_digit("-5", Value::Integer(-5))]
-    #[case::negative_multi_digit("-98765", Value::Integer(-98765))]
+    #[case::negative_single_digit("-5", Value::UnaryOp(UnaryOperator::Negate, Box::new(Value::Integer(5))))]
+    #[case::negative_multi_digit("-98765", Value::UnaryOp(UnaryOperator::Negate, Box::new(Value::Integer(98765))))]
     #[case::large_integer("999999999", Value::Integer(999999999))]
     // Basic floats
     #[case::float_one_decimal("1.0", Value::Float(1.0))]
     #[case::float_multi_decimal("1.15", Value::Float(1.15))]
     #[case::float_leading_zero("0.5", Value::Float(0.5))]
-    #[case::negative_float("-2.5", Value::Float(-2.5))]
+    #[case::negative_float("-2.5", Value::UnaryOp(UnaryOperator::Negate, Box::new(Value::Float(2.5))))]
     #[case::scientific_positive_exp("1.5e10", Value::Float(1.5e10))]
     #[case::scientific_negative_exp("1.5e-10", Value::Float(1.5e-10))]
     #[case::scientific_plus_sign("1.5e+10", Value::Float(1.5e+10))]
@@ -475,5 +647,175 @@ mod tests {
     fn test_readme_sql_integration_accessor_example() {
         let expr = parse("user.created_at");
         assert!(matches!(expr, Value::Accessor(_, _)));
+    }
+
+    #[rstest::rstest]
+    // Simple arithmetic operators
+    #[case::add_simple("1 + 2", Value::BinaryOp(BinaryOperator::Add, Box::new(Value::Integer(1)), Box::new(Value::Integer(2))))]
+    #[case::subtract_simple("5 - 3", Value::BinaryOp(BinaryOperator::Subtract, Box::new(Value::Integer(5)), Box::new(Value::Integer(3))))]
+    #[case::multiply_simple("3 * 4", Value::BinaryOp(BinaryOperator::Multiply, Box::new(Value::Integer(3)), Box::new(Value::Integer(4))))]
+    #[case::divide_simple("10 / 2", Value::BinaryOp(BinaryOperator::Divide, Box::new(Value::Integer(10)), Box::new(Value::Integer(2))))]
+    #[case::modulo_simple("10 % 3", Value::BinaryOp(BinaryOperator::Modulo, Box::new(Value::Integer(10)), Box::new(Value::Integer(3))))]
+    // Comparison operators
+    #[case::equal_simple("1 == 1", Value::BinaryOp(BinaryOperator::Equal, Box::new(Value::Integer(1)), Box::new(Value::Integer(1))))]
+    #[case::not_equal_simple("1 != 2", Value::BinaryOp(BinaryOperator::NotEqual, Box::new(Value::Integer(1)), Box::new(Value::Integer(2))))]
+    #[case::less_simple("1 < 2", Value::BinaryOp(BinaryOperator::Less, Box::new(Value::Integer(1)), Box::new(Value::Integer(2))))]
+    #[case::less_equal_simple("1 <= 2", Value::BinaryOp(BinaryOperator::LessEqual, Box::new(Value::Integer(1)), Box::new(Value::Integer(2))))]
+    #[case::greater_simple("2 > 1", Value::BinaryOp(BinaryOperator::Greater, Box::new(Value::Integer(2)), Box::new(Value::Integer(1))))]
+    #[case::greater_equal_simple("2 >= 1", Value::BinaryOp(BinaryOperator::GreaterEqual, Box::new(Value::Integer(2)), Box::new(Value::Integer(1))))]
+    // Logical operators
+    #[case::and_simple("1 && 2", Value::BinaryOp(BinaryOperator::And, Box::new(Value::Integer(1)), Box::new(Value::Integer(2))))]
+    #[case::or_simple("1 || 2", Value::BinaryOp(BinaryOperator::Or, Box::new(Value::Integer(1)), Box::new(Value::Integer(2))))]
+    // Unary operators
+    #[case::not_unary("!a", Value::UnaryOp(UnaryOperator::Not, Box::new(Value::Identifier("a".to_string()))))]
+    #[case::negate_unary("-5", Value::UnaryOp(UnaryOperator::Negate, Box::new(Value::Integer(5))))]
+    #[case::bitnot_unary("~x", Value::UnaryOp(UnaryOperator::BitwiseNot, Box::new(Value::Identifier("x".to_string()))))]
+    fn test_single_operators(#[case] input: &str, #[case] expected: Value) {
+        let result = parse(input);
+        assert_eq!(result, expected);
+    }
+
+    #[rstest::rstest]
+    // Precedence: multiplicative before additive
+    #[case::multiply_before_add("1 + 2 * 3", 
+        Value::BinaryOp(BinaryOperator::Add, 
+            Box::new(Value::Integer(1)),
+            Box::new(Value::BinaryOp(BinaryOperator::Multiply, 
+                Box::new(Value::Integer(2)), 
+                Box::new(Value::Integer(3))))))]
+    #[case::divide_before_subtract("10 - 6 / 2", 
+        Value::BinaryOp(BinaryOperator::Subtract, 
+            Box::new(Value::Integer(10)),
+            Box::new(Value::BinaryOp(BinaryOperator::Divide, 
+                Box::new(Value::Integer(6)), 
+                Box::new(Value::Integer(2))))))]
+    // Precedence: comparison before logical
+    #[case::comparison_before_and("1 < 2 && 3 < 4", 
+        Value::BinaryOp(BinaryOperator::And,
+            Box::new(Value::BinaryOp(BinaryOperator::Less, Box::new(Value::Integer(1)), Box::new(Value::Integer(2)))),
+            Box::new(Value::BinaryOp(BinaryOperator::Less, Box::new(Value::Integer(3)), Box::new(Value::Integer(4))))))]
+    // Precedence: && before ||
+    #[case::and_before_or("true || false && false", 
+        Value::BinaryOp(BinaryOperator::Or,
+            Box::new(Value::Identifier("true".to_string())),
+            Box::new(Value::BinaryOp(BinaryOperator::And, 
+                Box::new(Value::Identifier("false".to_string())), 
+                Box::new(Value::Identifier("false".to_string()))))))]
+    fn test_operator_precedence(#[case] input: &str, #[case] expected: Value) {
+        let result = parse(input);
+        assert_eq!(result, expected);
+    }
+
+    #[rstest::rstest]
+    // Parentheses override precedence
+    #[case::parens_override_mult_add("(1 + 2) * 3", 
+        Value::BinaryOp(BinaryOperator::Multiply, 
+            Box::new(Value::BinaryOp(BinaryOperator::Add, 
+                Box::new(Value::Integer(1)), 
+                Box::new(Value::Integer(2)))),
+            Box::new(Value::Integer(3))))]
+    #[case::parens_override_or("(a || b) && c", 
+        Value::BinaryOp(BinaryOperator::And,
+            Box::new(Value::BinaryOp(BinaryOperator::Or, 
+                Box::new(Value::Identifier("a".to_string())), 
+                Box::new(Value::Identifier("b".to_string())))),
+            Box::new(Value::Identifier("c".to_string()))))]
+    // Nested parentheses
+    #[case::nested_parens("((1 + 2) * 3) - 4", 
+        Value::BinaryOp(BinaryOperator::Subtract,
+            Box::new(Value::BinaryOp(BinaryOperator::Multiply, 
+                Box::new(Value::BinaryOp(BinaryOperator::Add, 
+                    Box::new(Value::Integer(1)), 
+                    Box::new(Value::Integer(2)))),
+                Box::new(Value::Integer(3)))),
+            Box::new(Value::Integer(4))))]
+    fn test_parentheses(#[case] input: &str, #[case] expected: Value) {
+        let result = parse(input);
+        assert_eq!(result, expected);
+    }
+
+    #[rstest::rstest]
+    // Associativity: left-associative
+    #[case::left_assoc_subtract("1 - 2 - 3", 
+        Value::BinaryOp(BinaryOperator::Subtract,
+            Box::new(Value::BinaryOp(BinaryOperator::Subtract, 
+                Box::new(Value::Integer(1)), 
+                Box::new(Value::Integer(2)))),
+            Box::new(Value::Integer(3))))]
+    #[case::left_assoc_divide("20 / 4 / 2", 
+        Value::BinaryOp(BinaryOperator::Divide,
+            Box::new(Value::BinaryOp(BinaryOperator::Divide, 
+                Box::new(Value::Integer(20)), 
+                Box::new(Value::Integer(4)))),
+            Box::new(Value::Integer(2))))]
+    fn test_associativity(#[case] input: &str, #[case] expected: Value) {
+        let result = parse(input);
+        assert_eq!(result, expected);
+    }
+
+    #[rstest::rstest]
+    // Chained unary operators
+    #[case::double_negation("!!a", 
+        Value::UnaryOp(UnaryOperator::Not, 
+            Box::new(Value::UnaryOp(UnaryOperator::Not, 
+                Box::new(Value::Identifier("a".to_string()))))))]
+    #[case::double_negation_value("-(-5)", 
+        Value::UnaryOp(UnaryOperator::Negate, 
+            Box::new(Value::UnaryOp(UnaryOperator::Negate, 
+                Box::new(Value::Integer(5))))))]
+    #[case::triple_negate("---5", 
+        Value::UnaryOp(UnaryOperator::Negate,
+            Box::new(Value::UnaryOp(UnaryOperator::Negate,
+                Box::new(Value::UnaryOp(UnaryOperator::Negate,
+                    Box::new(Value::Integer(5))))))))]
+    fn test_chained_unary(#[case] input: &str, #[case] expected: Value) {
+        let result = parse(input);
+        assert_eq!(result, expected);
+    }
+
+    #[rstest::rstest]
+    // Mixed operators with complex values
+    #[case::operators_with_accessor("user.age > 18", 
+        Value::BinaryOp(BinaryOperator::Greater,
+            Box::new(Value::Accessor(
+                Box::new(Value::Identifier("user".to_string())),
+                Box::new(Value::Identifier("age".to_string())))),
+            Box::new(Value::Integer(18))))]
+    #[case::operators_with_function_call("getValue() + 5", 
+        Value::BinaryOp(BinaryOperator::Add,
+            Box::new(Value::FunctionCall("getValue".to_string(), vec![])),
+            Box::new(Value::Integer(5))))]
+    #[case::complex_logic("a.b > 5 && c() == \"x\"",
+        Value::BinaryOp(BinaryOperator::And,
+            Box::new(Value::BinaryOp(BinaryOperator::Greater,
+                Box::new(Value::Accessor(
+                    Box::new(Value::Identifier("a".to_string())),
+                    Box::new(Value::Identifier("b".to_string())))),
+                Box::new(Value::Integer(5)))),
+            Box::new(Value::BinaryOp(BinaryOperator::Equal,
+                Box::new(Value::FunctionCall("c".to_string(), vec![])),
+                Box::new(Value::String("x".to_string()))))))]
+    fn test_mixed_operators_with_values(#[case] input: &str, #[case] expected: Value) {
+        let result = parse(input);
+        assert_eq!(result, expected);
+    }
+
+    #[rstest::rstest]
+    // Operators with strings and floats
+    #[case::float_add("1.5 + 2.5", 
+        Value::BinaryOp(BinaryOperator::Add,
+            Box::new(Value::Float(1.5)),
+            Box::new(Value::Float(2.5))))]
+    #[case::string_compare(r#""hello" == "hello""#, 
+        Value::BinaryOp(BinaryOperator::Equal,
+            Box::new(Value::String("hello".to_string())),
+            Box::new(Value::String("hello".to_string()))))]
+    #[case::mixed_numeric("1 + 2.5", 
+        Value::BinaryOp(BinaryOperator::Add,
+            Box::new(Value::Integer(1)),
+            Box::new(Value::Float(2.5))))]
+    fn test_operators_with_various_types(#[case] input: &str, #[case] expected: Value) {
+        let result = parse(input);
+        assert_eq!(result, expected);
     }
 }

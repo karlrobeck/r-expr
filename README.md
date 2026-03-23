@@ -16,6 +16,13 @@ A lightweight Rust parser library that parses string expressions into an extensi
 
 The resulting `Value` enum can be traversed, transformed, or compiled to any target system—SQL, custom functions, configuration, or domain-specific languages.
 
+Key features:
+- **Operators** — Arithmetic, comparison, logical, and unary operations with proper precedence
+- **Parentheses** — Explicit grouping to override precedence
+- **Accessor chains** — Navigate nested data with dot and bracket notation
+- **Function & method calls** — Direct and chained invocation
+- **Literals** — Integers, floats, and strings
+
 ## Quick Start
 
 ### Installation
@@ -62,6 +69,8 @@ user.profile.email      // Chained dot accessors
 user["profile"]         // Bracket accessor
 user["profile"]["email"] // Chained bracket accessors
 user.profile["email"]   // Mix dot and bracket accessors
+user.age + 5            // With arithmetic operator
+user.status == "active" // With comparison operator
 ```
 
 Parse example:
@@ -74,6 +83,16 @@ let expr = parse("user.profile.email")?;
 //     Value::Identifier("profile")
 //   ),
 //   Value::Identifier("email")
+// )
+
+let expr = parse("user.age > 18")?;
+// Value::BinaryOp(
+//   Greater,
+//   Value::Accessor(
+//     Value::Identifier("user"),
+//     Value::Identifier("age")
+//   ),
+//   Value::Integer(18)
 // )
 ```
 
@@ -125,6 +144,60 @@ let expr = parse("user.profile:transform()")?;
 // )
 ```
 
+### Operators
+
+Full support for arithmetic, comparison, logical, and unary operators with standard math precedence:
+
+**Arithmetic Operators** (Left-associative)
+```rust
+1 + 2                   // Addition
+5 - 3                   // Subtraction
+3 * 4                   // Multiplication
+10 / 2                  // Division
+10 % 3                  // Modulo
+```
+
+**Comparison Operators**
+```rust
+1 == 1                  // Equal
+1 != 2                  // Not equal
+1 < 2                   // Less than
+1 <= 2                  // Less or equal
+2 > 1                   // Greater than
+2 >= 1                  // Greater or equal
+```
+
+**Logical Operators** (Left-associative)
+```rust
+true && false           // Logical AND
+true || false           // Logical OR
+!flag                   // Logical NOT
+```
+
+**Unary Operators** (Right-associative)
+```rust
+-5                      // Negation
+!flag                   // Logical NOT
+~bits                   // Bitwise NOT
+```
+
+**Operator Precedence** (highest to lowest)
+| Level | Operator | Associativity |
+|-------|----------|---------------|
+| 1 | Unary: `!`, `-`, `~` | Right |
+| 2 | Multiplicative: `*`, `/`, `%` | Left |
+| 3 | Additive: `+`, `-` | Left |
+| 4 | Comparison: `==`, `!=`, `<`, `<=`, `>`, `>=` | Left |
+| 5 | Logical AND: `&&` | Left |
+| 6 | Logical OR: `\|\|` | Left |
+
+**Parentheses for Grouping**
+```rust
+(1 + 2) * 3             // → 9 (not 7)
+(a || b) && c           // Group logical operations
+((x > 5) && (y < 10))   // Nested grouping
+```
+
 ### Literals
 
 Supported literal types:
@@ -137,12 +210,19 @@ Supported literal types:
 "escaped \"quotes\""    // Escaped characters
 ```
 
-Parse example:
+Parse examples:
 
 ```rust
 parse("42")?;           // Value::Integer(42)
 parse("3.14")?;         // Value::Float(3.14)
 parse("\"text\"")?;     // Value::String("text".to_string())
+
+// With operators
+parse("1 + 2 * 3")?;    // Value::BinaryOp(
+                        //   Add,
+                        //   Integer(1),
+                        //   BinaryOp(Multiply, Integer(2), Integer(3))
+                        // )
 ```
 
 ## API Documentation
@@ -201,6 +281,27 @@ pub enum Value {
     /// Method call on an accessor (e.g., data:transform())
     /// First param: object, Second param: method name, Third param: arguments
     MethodCall(Box<Value>, String, Vec<Value>),
+    
+    /// Binary operation (e.g., 1 + 2, a && b)
+    /// First param: operator, Second param: left operand, Third param: right operand
+    BinaryOp(BinaryOperator, Box<Value>, Box<Value>),
+    
+    /// Unary operation (e.g., !flag, -5)
+    /// First param: operator, Second param: operand
+    UnaryOp(UnaryOperator, Box<Value>),
+}
+
+pub enum BinaryOperator {
+    // Arithmetic
+    Add, Subtract, Multiply, Divide, Modulo,
+    // Comparison
+    Equal, NotEqual, Less, LessEqual, Greater, GreaterEqual,
+    // Logical
+    And, Or,
+}
+
+pub enum UnaryOperator {
+    Not, Negate, BitwiseNot,
 }
 ```
 
@@ -245,6 +346,35 @@ fn to_sql(value: &Value) -> String {
                 .join(", ");
             format!("{}({}, {})", method.to_uppercase(), obj_sql, args_sql)
         },
+        Value::BinaryOp(op, left, right) => {
+            let left_sql = to_sql(left);
+            let right_sql = to_sql(right);
+            let op_str = match op {
+                BinaryOperator::Add => "+",
+                BinaryOperator::Subtract => "-",
+                BinaryOperator::Multiply => "*",
+                BinaryOperator::Divide => "/",
+                BinaryOperator::Modulo => "%",
+                BinaryOperator::Equal => "=",
+                BinaryOperator::NotEqual => "!=",
+                BinaryOperator::Less => "<",
+                BinaryOperator::LessEqual => "<=",
+                BinaryOperator::Greater => ">",
+                BinaryOperator::GreaterEqual => ">=",
+                BinaryOperator::And => "AND",
+                BinaryOperator::Or => "OR",
+            };
+            format!("({} {} {})", left_sql, op_str, right_sql)
+        },
+        Value::UnaryOp(op, operand) => {
+            let operand_sql = to_sql(operand);
+            let op_str = match op {
+                UnaryOperator::Not => "NOT",
+                UnaryOperator::Negate => "-",
+                UnaryOperator::BitwiseNot => "~",
+            };
+            format!("({} {})", op_str, operand_sql)
+        },
     }
 }
 
@@ -261,6 +391,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("SQL: {}", sql);
     // Output: SQL: user.created_at
     
+    // Example: user.age > 18 AND status == "active"
+    let expr = parse("user.age > 18 && status == \"active\"")?;
+    let sql = to_sql(&expr);
+    println!("SQL: WHERE {}", sql);
+    // Output: SQL: WHERE ((user.age > 18) AND (status = 'active'))
+    
+    // Example: (order_total * 1.1) > 1000 (with parentheses)
+    let expr = parse("(order.total * 1.1) > 1000")?;
+    let sql = to_sql(&expr);
+    println!("SQL: WHERE {}", sql);
+    // Output: SQL: WHERE (((order.total * 1.1)) > 1000)
+    
     Ok(())
 }
 ```
@@ -275,40 +417,56 @@ With this template, you can build more sophisticated SQL generators that:
 
 ### 1. SQL Query Builders
 
-Build dynamic SQL queries from user input or configuration without string concatenation:
+Build dynamic SQL queries with filters, comparisons, and computed columns:
 
 ```
 revenue:sum()                    → SELECT SUM(revenue)
-orders["status"]:count()           → SELECT COUNT(orders['status'])
-date:format("YYYY-MM-DD")        → Use in DATE_FORMAT(...) function
+orders["status"]:count()         → SELECT COUNT(orders['status'])
+user.age > 18 && status == "active" → WHERE (user.age > 18) AND (status = 'active')
+(price * 1.1) > 100              → WHERE (price * 1.1) > 100
+-discount as discount            → Unary negation for columns
+profit = revenue - expenses      → Computed columns
 ```
 
-### 2. Expression Evaluators
+### 2. Filtering & Query Languages
+
+Complex filter expressions in REST APIs or data pipelines:
+
+```
+items["quantity"] > 0 && price < 100
+tags:includes("featured") || rating >= 4.5
+!archived && status == "published"
+```
+
+### 3. Expression Evaluators
 
 Parse and evaluate mathematical or logical expressions:
 
 ```
-price.value:multiply(2)          → Scale derived fields
-discount:apply(0.1)              → Apply transformations
-items:calculate()                → Aggregate operations
+price.value * 1.2                → Scale derived fields
+(discount + tax) / 100           → Apply transformations
+!feature.enabled                 → Logical negation
+items:length() > 5 && total >= 50 → Complex conditions
 ```
 
-### 3. Custom DSLs
+### 4. Custom DSLs for Rules Engines
 
-Build domain-specific languages for configuration or scripting:
-
-```
-cache.ttl:set(3600)              → Cache configuration TTL
-features.enabled:check()         → Feature flagging
-```
-
-### 4. Configuration Languages
-
-Parse typed configuration expressions:
+Build business rules with comparison and logical operators:
 
 ```
-log.format:json()                → Logging configuration
-db.pool.size:max()               → Connection pool settings
+user.credit_score >= 700 && income > 50000 → Loan eligibility
+order.total * 0.1 as shipping_fee          → Dynamic calculations
+age >= 18 && (citizenship == "USA" || visa == "valid") → Complex logic
+```
+
+### 5. Configuration & Metrics
+
+Parse configuration expressions with operators:
+
+```
+cache.ttl = 3600                 → Cache configuration
+alerts:trigger(error_count > 10) → Conditional alerts
+metrics.cpu > 80 || memory > 90  → System monitoring
 ```
 
 ## Performance Considerations
@@ -324,11 +482,48 @@ db.pool.size:max()               → Connection pool settings
 - Function call with 3 args: ~ 8 μs
 - Deeply nested expressions: linear in expression size
 
+## Operator Examples
+
+### Arithmetic Operations
+
+```rust
+use r_expr::{parse, Value, BinaryOperator};
+
+let expr = parse("1 + 2 * 3")?;  // Respects precedence: 1 + (2 * 3)
+match expr {
+    Value::BinaryOp(BinaryOperator::Add, left, right) => {
+        // left = Integer(1)
+        // right = BinaryOp(Multiply, Integer(2), Integer(3))
+    },
+    _ => {}
+}
+```
+
+### Logical Conditions
+
+```rust
+let expr = parse("age >= 18 && (status == \"active\" || admin)")?;
+// Builds nested AND/OR structure with proper grouping
+```
+
+### Complex Filters
+
+```rust
+let expr = parse("user.role == \"admin\" && !archived && score > 100")?;
+// Multi-condition filter suitable for database WHERE clauses
+```
+
+### Computed Fields
+
+```rust
+let expr = parse("(price * quantity) - discount")?;
+// Arithmetic with accessors for calculations
+```
+
 ## Contributing
 
 We welcome contributions! Areas of interest:
 
-- **Grammar Enhancements** — Add support for operators (`+`, `-`, `*`, `/`), comparisons, or conditional syntax
 - **Performance Optimizations** — Profile and optimize bottlenecks, add benchmarks
 - **Documentation** — Expand examples, add integration guides for other systems
 - **Testing** — Edge case coverage, fuzz testing
