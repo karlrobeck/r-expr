@@ -1,9 +1,7 @@
 # r-expr
 
-[![Crates.io](https://img.shields.io/crates/v/r-expr.svg)](https://crates.io/crates/r-expr)
 [![GitHub](https://img.shields.io/badge/github-r--expr-blue?logo=github)](https://github.com/karlrobeck/r-expr)
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
-![Crates.io Downloads](https://img.shields.io/crates/d/r-expr)
 
 A lightweight Rust parser library that parses string expressions into an extensible enum representation. Designed for building SQL query builders, custom DSLs, expression evaluators, and configuration systems.
 
@@ -26,7 +24,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-r-expr = "0.1"
+r-expr = { git = "https://github.com/karlrobeck/r-expr" }
 ```
 
 ### Basic Example
